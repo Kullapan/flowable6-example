@@ -1,0 +1,7 @@
+com\example\flowable\delegate\PersistApplicationDelegate$1.class
+com\example\flowable\delegate\FinalizePolicyDelegate.class
+com\example\flowable\delegate\UpdateRejectStatusDelegate.class
+com\example\flowable\delegate\UpdateRejectStatusDelegate$1.class
+com\example\flowable\FlowableEngineApplication.class
+com\example\flowable\delegate\PersistApplicationDelegate.class
+com\example\flowable\delegate\FinalizePolicyDelegate$1.class

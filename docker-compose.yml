@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: flowable6-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: flowable
+      POSTGRES_PASSWORD: flowable
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    networks:
+      - policy-network
+
+  flowable-ui:
+    image: flowable/flowable-ui:6.7.2
+    container_name: flowable6-flowable-ui
+    ports:
+      - "8086:8080"
+    depends_on:
+      - postgres
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/flowable_engine
+      - SPRING_DATASOURCE_USERNAME=flowable
+      - SPRING_DATASOURCE_PASSWORD=flowable
+      - SPRING_DATASOURCE_DRIVER_CLASS_NAME=org.postgresql.Driver
+      - FLOWABLE_COMMON_APP_IDM_URL=http://localhost:8080/flowable-ui/idm
+    networks:
+      - policy-network
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: flowable6-pgadmin
+    restart: always
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - postgres
+    networks:
+      - policy-network
+
+
+networks:
+  policy-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  pgadmin_data:

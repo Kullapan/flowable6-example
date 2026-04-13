@@ -1,0 +1,211 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions
+    xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+    xmlns:flowable="http://flowable.org/bpmn"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:omgdc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:omgdi="http://www.omg.org/spec/DD/20100524/DI"
+    typeLanguage="http://www.w3.org/2001/XMLSchema"
+    expressionLanguage="http://www.w3.org/1999/XPath"
+    targetNamespace="http://flowable.org/example">
+
+  <!--
+    Process Key : policy_submission_v1
+    Business Key: appNumber
+    Pattern     : Submit -> Persist(async) -> Review -> Gateway -> Finalize | Reject
+  -->
+  <process id="policy_submission_v1" name="Policy Submission and Review" isExecutable="true">
+
+    <!-- ══════════════════════════════════════
+         START EVENT
+    ══════════════════════════════════════ -->
+    <startEvent id="startEvent" name="Start Policy Request" flowable:initiator="initiator"/>
+
+    <!-- ══════════════════════════════════════
+         STEP 1: Submit Policy (User Task)
+         Assignee: initiator (the person who started the process)
+    ══════════════════════════════════════ -->
+    <userTask id="submitPolicyTask" name="Submit Policy Request"
+        flowable:assignee="${initiator}"
+        flowable:formFieldValidation="false">
+      <documentation>Customer fills in policy details: name, type, premium amount.</documentation>
+      <extensionElements>
+        <flowable:formProperty id="appNumber"      name="Application Number"  type="string"  required="true"/>
+        <flowable:formProperty id="customerName"   name="Customer Name"       type="string"  required="true"/>
+        <flowable:formProperty id="policyType"     name="Policy Type"         type="enum"    required="true">
+          <flowable:value id="life"     name="Life Insurance"/>
+          <flowable:value id="health"   name="Health Insurance"/>
+          <flowable:value id="auto"     name="Auto Insurance"/>
+          <flowable:value id="property" name="Property Insurance"/>
+        </flowable:formProperty>
+        <flowable:formProperty id="premiumAmount"  name="Premium Amount"      type="long"    required="true"/>
+      </extensionElements>
+    </userTask>
+
+    <!-- ══════════════════════════════════════
+         STEP 2: Persist Application (Service Task — async)
+         Inserts application_table record as 'PENDING'
+         Transactional: if this fails it goes to Dead-Letter Queue for retry
+    ══════════════════════════════════════ -->
+    <serviceTask id="persistApplicationTask" name="Persist Application (PENDING)"
+        flowable:async="true"
+        flowable:exclusive="true"
+        flowable:delegateExpression="${persistApplicationDelegate}">
+      <documentation>Calls custom-backend to INSERT into application_table with status PENDING.</documentation>
+    </serviceTask>
+
+    <!-- ══════════════════════════════════════
+         STEP 3: Policy Review (User Task)
+         Candidate Group: underwriter_group
+    ══════════════════════════════════════ -->
+    <userTask id="approveRejectPolicyTask" name="Policy Review (Underwriter)"
+        flowable:candidateGroups="underwriter_group"
+        flowable:formFieldValidation="false">
+      <documentation>Underwriter reviews the policy and sets decision + optional rejectReason.</documentation>
+      <extensionElements>
+        <flowable:formProperty id="decision"     name="Approved?"      type="boolean" required="true"/>
+        <flowable:formProperty id="rejectReason" name="Reject Reason"  type="string"  required="false"/>
+      </extensionElements>
+    </userTask>
+
+    <!-- ══════════════════════════════════════
+         STEP 4: Exclusive Gateway — Decision Point
+    ══════════════════════════════════════ -->
+    <exclusiveGateway id="decisionGateway" name="Approved or Rejected?"/>
+
+    <!-- ══════════════════════════════════════
+         STEP 5A: Finalize Policy (Service Task — async) — HAPPY PATH
+         Inserts into policy_table and updates application_table => COMPLETED
+    ══════════════════════════════════════ -->
+    <serviceTask id="finalizePolicyTask" name="Finalize Policy (COMPLETED)"
+        flowable:async="true"
+        flowable:exclusive="true"
+        flowable:delegateExpression="${finalizePolicyDelegate}">
+      <documentation>Inserts into policy_table and marks application as COMPLETED (happy path).</documentation>
+    </serviceTask>
+
+    <!-- ══════════════════════════════════════
+         STEP 5B: Reject Policy Update (Service Task — async) — REJECT PATH
+         Updates application_table => REJECTED + saves rejectReason
+    ══════════════════════════════════════ -->
+    <serviceTask id="updateRejectStatusTask" name="Update Reject Status (REJECTED)"
+        flowable:async="true"
+        flowable:exclusive="true"
+        flowable:delegateExpression="${updateRejectStatusDelegate}">
+      <documentation>Updates application_table status to REJECTED and stores the reject reason.</documentation>
+    </serviceTask>
+
+    <!-- ══════════════════════════════════════
+         END EVENTS
+    ══════════════════════════════════════ -->
+    <endEvent id="endEventApproved" name="Policy Approved"/>
+    <endEvent id="endEventRejected" name="Policy Rejected"/>
+
+    <!-- ══════════════════════════════════════
+         SEQUENCE FLOWS
+    ══════════════════════════════════════ -->
+    <sequenceFlow id="flow_start_submit"       sourceRef="startEvent"              targetRef="submitPolicyTask"/>
+    <sequenceFlow id="flow_submit_persist"     sourceRef="submitPolicyTask"         targetRef="persistApplicationTask"/>
+    <sequenceFlow id="flow_persist_review"     sourceRef="persistApplicationTask"   targetRef="approveRejectPolicyTask"/>
+    <sequenceFlow id="flow_review_gateway"     sourceRef="approveRejectPolicyTask"  targetRef="decisionGateway"/>
+
+    <sequenceFlow id="flow_approved" name="Approved" sourceRef="decisionGateway" targetRef="finalizePolicyTask">
+      <conditionExpression xsi:type="tFormalExpression">${decision == true}</conditionExpression>
+    </sequenceFlow>
+
+    <sequenceFlow id="flow_rejected" name="Rejected" sourceRef="decisionGateway" targetRef="updateRejectStatusTask">
+      <conditionExpression xsi:type="tFormalExpression">${decision == false}</conditionExpression>
+    </sequenceFlow>
+
+    <sequenceFlow id="flow_finalize_end"       sourceRef="finalizePolicyTask"       targetRef="endEventApproved"/>
+    <sequenceFlow id="flow_reject_end"         sourceRef="updateRejectStatusTask"    targetRef="endEventRejected"/>
+
+  </process>
+
+  <!-- ══════════════════════════════════════
+       BPMN DIAGRAM (DI)
+  ══════════════════════════════════════ -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_policy_submission_v1">
+    <bpmndi:BPMNPlane bpmnElement="policy_submission_v1" id="BPMNPlane_policy_submission_v1">
+
+      <!-- Start Event -->
+      <bpmndi:BPMNShape bpmnElement="startEvent" id="BPMNShape_startEvent">
+        <omgdc:Bounds x="30" y="130" width="30" height="30"/>
+        <bpmndi:BPMNLabel><omgdc:Bounds x="-10" y="165" width="110" height="18"/></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+
+      <!-- Step 1: Submit Policy Task -->
+      <bpmndi:BPMNShape bpmnElement="submitPolicyTask" id="BPMNShape_submitPolicyTask">
+        <omgdc:Bounds x="110" y="110" width="120" height="70"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Step 2: Persist Application -->
+      <bpmndi:BPMNShape bpmnElement="persistApplicationTask" id="BPMNShape_persistApplicationTask">
+        <omgdc:Bounds x="280" y="110" width="120" height="70"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Step 3: Review Task -->
+      <bpmndi:BPMNShape bpmnElement="approveRejectPolicyTask" id="BPMNShape_approveRejectPolicyTask">
+        <omgdc:Bounds x="450" y="110" width="120" height="70"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Step 4: Exclusive Gateway -->
+      <bpmndi:BPMNShape bpmnElement="decisionGateway" id="BPMNShape_decisionGateway" isMarkerVisible="true">
+        <omgdc:Bounds x="625" y="120" width="50" height="50"/>
+        <bpmndi:BPMNLabel><omgdc:Bounds x="590" y="175" width="120" height="18"/></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+
+      <!-- Step 5A: Finalize Policy (top branch) -->
+      <bpmndi:BPMNShape bpmnElement="finalizePolicyTask" id="BPMNShape_finalizePolicyTask">
+        <omgdc:Bounds x="730" y="50" width="120" height="70"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Step 5B: Reject Status (bottom branch) -->
+      <bpmndi:BPMNShape bpmnElement="updateRejectStatusTask" id="BPMNShape_updateRejectStatusTask">
+        <omgdc:Bounds x="730" y="190" width="120" height="70"/>
+      </bpmndi:BPMNShape>
+
+      <!-- End Events -->
+      <bpmndi:BPMNShape bpmnElement="endEventApproved" id="BPMNShape_endEventApproved">
+        <omgdc:Bounds x="910" y="70" width="28" height="28"/>
+        <bpmndi:BPMNLabel><omgdc:Bounds x="888" y="102" width="72" height="18"/></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape bpmnElement="endEventRejected" id="BPMNShape_endEventRejected">
+        <omgdc:Bounds x="910" y="210" width="28" height="28"/>
+        <bpmndi:BPMNLabel><omgdc:Bounds x="888" y="242" width="72" height="18"/></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+
+      <!-- Edges -->
+      <bpmndi:BPMNEdge bpmnElement="flow_start_submit" id="BPMNEdge_flow_start_submit">
+        <omgdi:waypoint x="60" y="145"/><omgdi:waypoint x="110" y="145"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="flow_submit_persist" id="BPMNEdge_flow_submit_persist">
+        <omgdi:waypoint x="230" y="145"/><omgdi:waypoint x="280" y="145"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="flow_persist_review" id="BPMNEdge_flow_persist_review">
+        <omgdi:waypoint x="400" y="145"/><omgdi:waypoint x="450" y="145"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="flow_review_gateway" id="BPMNEdge_flow_review_gateway">
+        <omgdi:waypoint x="570" y="145"/><omgdi:waypoint x="625" y="145"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="flow_approved" id="BPMNEdge_flow_approved">
+        <omgdi:waypoint x="650" y="120"/><omgdi:waypoint x="650" y="85"/><omgdi:waypoint x="730" y="85"/>
+        <bpmndi:BPMNLabel><omgdc:Bounds x="668" y="95" width="58" height="18"/></bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="flow_rejected" id="BPMNEdge_flow_rejected">
+        <omgdi:waypoint x="650" y="170"/><omgdi:waypoint x="650" y="225"/><omgdi:waypoint x="730" y="225"/>
+        <bpmndi:BPMNLabel><omgdc:Bounds x="668" y="190" width="52" height="18"/></bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="flow_finalize_end" id="BPMNEdge_flow_finalize_end">
+        <omgdi:waypoint x="850" y="85"/><omgdi:waypoint x="910" y="84"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge bpmnElement="flow_reject_end" id="BPMNEdge_flow_reject_end">
+        <omgdi:waypoint x="850" y="225"/><omgdi:waypoint x="910" y="224"/>
+      </bpmndi:BPMNEdge>
+
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</definitions>

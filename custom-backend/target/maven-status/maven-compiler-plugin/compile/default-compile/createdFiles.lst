@@ -1,0 +1,11 @@
+com\example\CustomBackendApplication.class
+com\example\entity\PolicyRecord.class
+com\example\repository\ApplicationRepository.class
+com\example\service\InsurancePolicyService.class
+com\example\service\InsurancePolicyService$2.class
+com\example\service\InsurancePolicyService$1.class
+com\example\repository\PolicyRepository.class
+com\example\controller\InternalApiController.class
+com\example\service\ApplicationService.class
+com\example\controller\InsurancePolicyController.class
+com\example\entity\ApplicationRecord.class
