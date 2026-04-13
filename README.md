@@ -49,6 +49,44 @@ To stop everything and **wipe the database completely** (factory reset):
 docker compose down -v
 ```
 
+## 💻 Local Development (Without Full Docker Builds)
+
+If you are actively writing code, waiting for Docker to rebuild on every change is slow. You can run a **Hybrid** setup: run only the infrastructure (database) in Docker, and run the apps manually on your host machine!
+
+### 1. Start Only the Infrastructure
+Run this from the project root to start PostgreSQL, PgAdmin, and Flowable UI in the background:
+```bash
+docker compose up -d postgres pgadmin flowable-ui
+```
+*(Because port `5432` is exposed to your host machine, your local Java apps can connect to `localhost:5432` seamlessly).*
+
+### 2. Run the Java Microservices
+Open two terminal windows (or use your IDE like IntelliJ/VSCode):
+```bash
+# Terminal 1 - Start the Flowable Engine (Starts on port 8081)
+cd flowable-engine
+./gradlew bootRun
+
+# Terminal 2 - Start the Custom Backend (Starts on port 8080)
+cd custom-backend
+./gradlew bootRun
+```
+
+### 3. Run the React Frontends
+Open two more terminal windows:
+```bash
+# Terminal 3 - Start the Client App (Starts on port 5173)
+cd webapp-client
+npm run dev
+
+# Terminal 4 - Start the Admin App (Starts on port 5174)
+cd webapp-admin
+npm run dev
+```
+
+> [!TIP]
+> **Why this works:** Both React apps use a `vite.config.ts` proxy config to automatically route `/api` calls to `localhost:8080` and `/process-api` to `localhost:8081`. You get instant hot-reloading without ever typing `docker compose build`!
+
 ---
 
 ## 🔒 Credentials & Git Security Review
