@@ -28,11 +28,16 @@ public class InsurancePolicyService {
     private final RestTemplate restTemplate;
     private final String flowableUrl;
 
-    public InsurancePolicyService(RestTemplateBuilder restTemplateBuilder) {
+    public InsurancePolicyService(RestTemplateBuilder restTemplateBuilder,
+                                  @org.springframework.beans.factory.annotation.Value("${flowable.engine.url:http://localhost:8081}") String url,
+                                  @org.springframework.beans.factory.annotation.Value("${flowable.engine.username:admin}") String username,
+                                  @org.springframework.beans.factory.annotation.Value("${flowable.engine.password:test}") String password) {
         this.restTemplate = restTemplateBuilder
-                .basicAuthentication("rest-admin", "test")
+                .basicAuthentication(username, password)
                 .build();
-        this.flowableUrl = "http://localhost:8081/process-api/runtime";
+        // Since the process instances endpoint is /process-api/runtime/process-instances
+        // we'll append /process-api/runtime to whatever the base URL is.
+        this.flowableUrl = url + "/process-api/runtime";
     }
 
     // ─── Step 1: Start the process ─────────────────────────────────────────

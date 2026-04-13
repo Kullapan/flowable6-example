@@ -1,58 +1,288 @@
-version: '3.8'
+# =============================================================================
+# docker-compose.yml — Full-Stack Flowable6 Orchestration
+# =============================================================================
+# Services overview:
+#   postgres         — Shared PostgreSQL 15 database
+#   flowable-ui      — Official Flowable 6.7.2 modelling / runtime UI
+#   pgadmin          — Database management UI
+#   flowable-engine  — Custom Spring Boot 2.7/Java 11 Flowable Engine REST API
+#   custom-backend   — Spring Boot 3.1/Java 17 API Gateway
+#   webapp-client    — React policyholder portal (built from ./webapp-client)
+#   webapp-admin     — React admin dashboard   (built from ./webapp-admin)
+#
+# All services share a single Docker bridge network called 'policy-network'.
+# Within this network, containers reference each other by *service name*
+# (e.g. "custom-backend", "postgres") — no IP addresses required.
+# =============================================================================
 
+# ---------------------------------------------------------------------------
+# Reusable YAML anchors
+# ---------------------------------------------------------------------------
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+# ===========================================================================
 services:
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # postgres
+  # Shared relational store for both Flowable engine tables and the custom
+  # backend's own application tables (created via init-db.sql).
+  # ──────────────────────────────────────────────────────────────────────────
   postgres:
     image: postgres:15
     container_name: flowable6-postgres
+    restart: unless-stopped
     ports:
+      # Map host 5432 → container 5432 for local DB tools (DBeaver, DataGrip).
       - "5432:5432"
     environment:
       POSTGRES_USER: flowable
       POSTGRES_PASSWORD: flowable
+      # 'postgres' is the default admin database; our init script creates
+      # additional databases (flowable_engine, custom_app).
       POSTGRES_DB: postgres
     volumes:
+      # Named volume persists data across container restarts.
       - postgres_data:/var/lib/postgresql/data
+      # Init SQL runs on first startup only (when the data directory is empty).
       - ./infrastructure/postgres/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d postgres -U flowable"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     networks:
       - policy-network
+    logging: *default-logging
 
+  # ──────────────────────────────────────────────────────────────────────────
+  # flowable-ui
+  # Official Flowable 6.7.2 application (modeller + task list + admin).
+  # Connects to the shared postgres instance on 'flowable_engine' database.
+  # ──────────────────────────────────────────────────────────────────────────
   flowable-ui:
     image: flowable/flowable-ui:6.7.2
     container_name: flowable6-flowable-ui
+    restart: unless-stopped
     ports:
+      # Access Flowable UI at http://localhost:8086/flowable-ui
       - "8086:8080"
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     environment:
       - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/flowable_engine
       - SPRING_DATASOURCE_USERNAME=flowable
       - SPRING_DATASOURCE_PASSWORD=flowable
       - SPRING_DATASOURCE_DRIVER_CLASS_NAME=org.postgresql.Driver
-      - FLOWABLE_COMMON_APP_IDM_URL=http://localhost:8080/flowable-ui/idm
+      # The IDM URL must be reachable FROM the browser, so it uses localhost.
+      - FLOWABLE_COMMON_APP_IDM_URL=http://localhost:8086/flowable-ui/idm
     networks:
       - policy-network
+    logging: *default-logging
 
+  # ──────────────────────────────────────────────────────────────────────────
+  # pgadmin
+  # Web-based PostgreSQL administration tool.
+  # ──────────────────────────────────────────────────────────────────────────
   pgadmin:
     image: dpage/pgadmin4
     container_name: flowable6-pgadmin
-    restart: always
+    restart: unless-stopped
     environment:
       PGADMIN_DEFAULT_EMAIL: admin@admin.com
       PGADMIN_DEFAULT_PASSWORD: admin
     ports:
+      # Access pgAdmin at http://localhost:5050
       - "5050:80"
     volumes:
       - pgadmin_data:/var/lib/pgadmin
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     networks:
       - policy-network
+    logging: *default-logging
 
+  # ──────────────────────────────────────────────────────────────────────────
+  # flowable-engine
+  # Custom Spring Boot 2.7.18 / Java 11 service that embeds the Flowable 6.7.2
+  # process engine and exposes its REST API on port 8081.
+  # It connects to the 'flowable_engine' PostgreSQL database and auto-deploys
+  # any BPMN files found in src/main/resources/Process/.
+  # ──────────────────────────────────────────────────────────────────────────
+  flowable-engine:
+    build:
+      context: ./flowable-engine
+      dockerfile: Dockerfile
+    container_name: flowable6-engine
+    restart: unless-stopped
+    ports:
+      # Flowable REST API at http://localhost:8081
+      # e.g. http://localhost:8081/process-api/runtime/process-instances
+      - "8081:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # ── Database ───────────────────────────────────────────────────────────
+      # Override localhost with the 'postgres' service name on the network.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/flowable_engine
+      SPRING_DATASOURCE_USERNAME: flowable
+      SPRING_DATASOURCE_PASSWORD: flowable
+      SPRING_DATASOURCE_DRIVER_CLASS_NAME: org.postgresql.Driver
 
+      # ── Flowable REST security (Basic Auth) ───────────────────────────────
+      # Matches spring.security.user.* in application.properties.
+      SPRING_SECURITY_USER_NAME: admin
+      SPRING_SECURITY_USER_PASSWORD: test
+
+      # ── Flowable settings ─────────────────────────────────────────────────
+      FLOWABLE_REST_APP_PROCESS_ENGINE_CONFIGURER_IDM_ENABLED: "true"
+      FLOWABLE_REST_APP_PROCESS_ENGINE_CONFIGURER_REST_API_ENABLED: "true"
+
+      # ── Server port ───────────────────────────────────────────────────────
+      SERVER_PORT: 8081
+
+      # ── Custom Backend Connectivity ───────────────────────────────────────
+      APP_CUSTOM_BACKEND_URL: http://custom-backend:8080
+
+      # ── JPA ───────────────────────────────────────────────────────────────
+      SPRING_JPA_HIBERNATE_DDL_AUTO: none
+    healthcheck:
+      # Probe the Flowable management endpoint with Basic Auth credentials.
+      test: ["CMD-SHELL", "curl -f -u admin:test http://localhost:8081/process-api/management/engine || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    networks:
+      - policy-network
+    logging: *default-logging
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # custom-backend
+  # Spring Boot 3.1.5 / Java 17 API Gateway built from source using Gradle.
+  # The Dockerfile uses a multi-stage build; only the runnable JAR ends up
+  # in the final image.
+  # ──────────────────────────────────────────────────────────────────────────
+  custom-backend:
+    build:
+      context: ./custom-backend
+      dockerfile: Dockerfile
+    container_name: flowable6-custom-backend
+    restart: unless-stopped
+    ports:
+      # Access the API at http://localhost:8080
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      flowable-engine:
+        condition: service_healthy
+    environment:
+      # ── Spring datasource (custom_app database) ───────────────────────────
+      # 'postgres' resolves to the postgres container on the shared network.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/custom_app_db
+      SPRING_DATASOURCE_USERNAME: flowable
+      SPRING_DATASOURCE_PASSWORD: flowable
+
+      # ── Flowable Engine REST connectivity ─────────────────────────────────
+      # The custom backend delegates workflow operations to the flowable-engine
+      # service. Uses the container's service name + internal port 8081.
+      FLOWABLE_ENGINE_URL: http://flowable-engine:8081
+      FLOWABLE_ENGINE_USERNAME: admin
+      FLOWABLE_ENGINE_PASSWORD: test
+
+      # ── Flowable UI connectivity (for modelling/admin calls) ──────────────
+      FLOWABLE_BASE_URL: http://flowable-ui:8080/flowable-ui
+
+      # ── JPA DDL ──────────────────────────────────────────────────────────
+      # 'validate' is the safe production default; use 'update' during dev.
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+
+      # ── Active profile ────────────────────────────────────────────────────
+      SPRING_PROFILES_ACTIVE: docker
+
+      # ── Logging ───────────────────────────────────────────────────────────
+      LOGGING_LEVEL_ROOT: INFO
+      LOGGING_LEVEL_COM_EXAMPLE: DEBUG
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    networks:
+      - policy-network
+    logging: *default-logging
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # webapp-client
+  # React + Vite policyholder portal served by Nginx.
+  # Nginx proxies /api/* → custom-backend on the shared network.
+  # ──────────────────────────────────────────────────────────────────────────
+  webapp-client:
+    build:
+      context: ./webapp-client
+      dockerfile: Dockerfile
+      args:
+        # Injected into the Vite bundle at build time.
+        # Inside the browser the React app calls /api/* which Nginx proxies.
+        VITE_API_BASE_URL: /api
+    container_name: flowable6-webapp-client
+    restart: unless-stopped
+    ports:
+      # Policyholder portal at http://localhost:3000
+      - "3000:80"
+    depends_on:
+      custom-backend:
+        condition: service_healthy
+    networks:
+      - policy-network
+    logging: *default-logging
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # webapp-admin
+  # React + Vite admin dashboard served by Nginx.
+  # Nginx proxies /api → custom-backend, /process-api + /idm-api → flowable-ui.
+  # ──────────────────────────────────────────────────────────────────────────
+  webapp-admin:
+    build:
+      context: ./webapp-admin
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: /api
+        VITE_FLOWABLE_UI_URL: /process-api
+    container_name: flowable6-webapp-admin
+    restart: unless-stopped
+    ports:
+      # Admin dashboard at http://localhost:3001
+      - "3001:80"
+    depends_on:
+      custom-backend:
+        condition: service_healthy
+      flowable-ui:
+        condition: service_started
+    networks:
+      - policy-network
+    logging: *default-logging
+
+# ===========================================================================
 networks:
   policy-network:
+    # A standard bridge network. All containers on this network can reach
+    # each other by service name via Docker's built-in DNS.
     driver: bridge
 
+# ===========================================================================
 volumes:
   postgres_data:
+    # Persists database data across 'docker-compose down' restarts.
+    # Use 'docker-compose down -v' to wipe data during development resets.
   pgadmin_data:

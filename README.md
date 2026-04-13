@@ -1,84 +1,76 @@
-# Policy Request & Approval System
+# Flowable 6 Insurance Policy Processing System
 
-A high-performance insurance policy orchestration system leveraging **Flowable 6**, **Spring Boot**, and **React**. This project demonstrates a clean separation between business logic (BFF) and workflow state management (Engine).
+A full-stack, entirely containerized workflow orchestration system built with **Flowable 6**, **Spring Boot**, and **React**.
+
+This project provides a complete microservice-oriented architecture where a Custom Backend acts as the API Gateway (BFF) and the Flowable Engine is embedded as a standalone REST microservice. It is orchestrated seamlessly via Docker Compose.
+
+---
 
 ## 🏗️ Architecture Overview
 
-The system follows a **Hybrid Implementation** model:
-- **Infrastructure (Docker)**: Managed PostgreSQL 15 and Flowable UI (Modeler/Admin).
-- **Core Orchestration (Local)**: A custom-built Java service (`flowable-engine`) hosting the Flowable Engine and REST API.
-- **Business logic (Local)**: A Spring Boot 3 BFF (`custom-backend`) that manages application data and triggers workflows.
-- **Interface (Local)**: A modern React dashboard (`web-client`) with high-density Glassmorphism design.
+The system runs entirely via Docker containers on a shared bridge network (`policy-network`), eliminating CORS issues via Nginx reverse proxies and keeping internal communication fully contained.
 
-## 🛠️ Tech Stack
-
-| Component | Technology | Version | Port |
-| :--- | :--- | :--- | :--- |
-| **Web Client** | React 18 + Tailwind | Latest | 5173 |
-| **Custom Backend** | Spring Boot 3 + Java 17 | 3.2.x | 8081 |
-| **Flowable Engine** | Spring Boot 2 + Java 11 | 2.7.x | 8083 |
-| **Flowable UI** | Docker Image | 6.7.2 | 8080 |
-| **Database** | PostgreSQL | 15 | 5432 |
+| Container Service | Responsibility | Framework / Tech | Internal Port | Exposed Port |
+| :--- | :--- | :--- | :--- | :--- |
+| **`postgres`** | Database for Flowable Engine & Custom App | PostgreSQL 15 | 5432 | `:5432` |
+| **`pgadmin`** | Database admin interface | pgAdmin 4 | 80 | `:5050` |
+| **`flowable-ui`** | Official Modeler, Admin & IDM apps | Flowable 6.7.2 | 8080 | `:8086` |
+| **`flowable-engine`** | Headless BPMN runtime & REST API | Spring Boot 2.7 (Java 11) | 8081 | `:8081` |
+| **`custom-backend`** | Custom API Gateway & Persistence layer | Spring Boot 3.1 (Java 17) | 8080 | `:8080` |
+| **`webapp-client`** | Public policy submission frontend | React / Nginx | 80 | `:3000` |
+| **`webapp-admin`** | Underwriter approval & task dashboard | React / Nginx | 80 | `:3001` |
 
 ---
 
 ## 🚀 Getting Started
 
-### 1. Prerequisites
-- Docker & Docker Compose
-- Java 11 (for Engine) and Java 17 (for Backend)
-- Maven 3.x
-- Node.js & npm
+The entire stack is containerized using optimized, multi-stage Dockerfiles. You do not need Java, Node.js, or Gradle installed on your host machine to run the project.
 
-### 2. Launch Infrastructure
-Start the database and Flowable UI monitoring tools:
+### 1. Launch the Stack
+Start the databases, Flowable UI, the Engine, Backend, and both Frontends:
 ```bash
-docker-compose up -d
+docker compose up --build -d
 ```
 
-### 3. Start the Custom Engine
-```bash
-cd flowable-engine
-mvn spring-boot:run
-```
+### 2. Access the Applications
+Once all containers are healthy, open your browser:
+*   **Submit a Policy (Client App):** [http://localhost:3000](http://localhost:3000)
+*   **Approve a Policy (Admin App):** [http://localhost:3001](http://localhost:3001)
+*   **Flowable UI (Modeler/Admin):** [http://localhost:8086/flowable-ui](http://localhost:8086/flowable-ui)
+*   **pgAdmin (Database UI):** [http://localhost:5050](http://localhost:5050)
 
-### 4. Start the Custom Backend (BFF)
+### 3. Teardown & Reset
+To stop all services:
 ```bash
-cd custom-backend
-mvn spring-boot:run
+docker compose down
 ```
-
-### 5. Start the Web Client
+To stop everything and **wipe the database completely** (factory reset):
 ```bash
-cd web-client
-npm install
-npm run dev
+docker compose down -v
 ```
 
 ---
 
-## 📂 Workflow Configuration
+## 🔒 Credentials & Git Security Review
 
-The business logic is defined in `workflow/policy-request.bpmn20.xml`. 
+This repository has been reviewed down to the configuration level prior to Git commit. 
 
-### Deployment
-To deploy the workflow to the custom engine, use the **Flowable UI** at `http://localhost:8080/flowable-ui/` or run this CURL:
+**There are NO sensitive AWS/Stripe/Cloud API keys in this project.** 
+The credentials defined throughout the application are strictly **development defaults**. They are completely safe to be committed to version control so that other developers can start the project instantly.
 
-```bash
-curl -u admin:test -X POST http://localhost:8083/repository/deployments \
-  -F "file=@workflow/policy-request.bpmn20.xml"
-```
+### Default Development Credentials
+*   **Flowable REST Basic Auth:** `admin` / `test`
+*   **Flowable UI App (Modeller/IDM):** `admin` / `test`
+*   **PostgreSQL User / Password:** `flowable` / `flowable`
+*   **PgAdmin Web UI:** `admin@admin.com` / `admin`
 
----
-
-## 🧪 Verification Flow
-
-1. **Submit Application**: Open the web client, select the **Requester** role, and submit a new policy request.
-2. **Review Task**: Switch to the **Underwriter** role. You will see the pending task retrieved from the custom engine.
-3. **Approve/Reject**: Completing the task will trigger the `custom-backend` callback to finalize the policy record.
-4. **Audit**: Use the **Flowable Admin** (available via Flowable UI) to inspect the execution variables and history.
+*(If you ever deploy this to a public cloud production cluster, you must inject real secrets via external CI/CD Environment Variables instead of the `docker-compose.yml` defaults).*
 
 ---
 
-> [!NOTE]
-> This system is designed for **high density** and **technical precision**. All UI components follow the specifications defined in `DESIGN.md`.
+## 🧪 System Roles & Workflow
+
+1.  **Policy Submit (Client UI):** A public user lands on `webapp-client` to submit their policy details (Premium, Type, Customer Name).
+2.  **API Gateway (Custom Backend):** Receives the HTTP payload, sets up system-level DB records in `custom_app_db`, and triggers the workflow over the Docker network.
+3.  **Process Engine:** Deploys internal variables and enters a User Task awaiting the Underwriting Group.
+4.  **Underwriter Approval (Admin UI):** The underwriter accesses `webapp-admin` to fetch pending tasks from the flowable engine. Upon approval, a BPMN Service Task uses `JavaDelegate` to ping the `custom-backend` to persist the definitive Policy.

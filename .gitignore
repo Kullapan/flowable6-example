@@ -1,0 +1,28 @@
+# IDE & OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+*.log
+
+# Java & Gradle
+.gradle/
+build/
+target/
+out/
+*.class
+*.jar
+*.war
+
+# Node & React
+node_modules/
+dist/
+build/
+.env.local
+.env.*.local
+npm-debug.log*
+
+# Docker mounts & databases
+postgres_data/
+pgadmin_data/

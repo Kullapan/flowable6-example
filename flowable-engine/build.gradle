@@ -1,0 +1,104 @@
+// =============================================================================
+// build.gradle — flowable-engine
+//
+// This is a Gradle equivalent of the existing pom.xml.
+// Key facts from pom.xml:
+//   - Spring Boot parent: 2.7.18  (NOT 3.x — Flowable 6.7.2 requires this)
+//   - Java version     : 11
+//   - Flowable version : 6.7.2
+//   - Server port      : 8081
+//
+// IMPORTANT: Spring Boot 2.7.x is the last release that supports Java 11 out
+// of the box.  Flowable 6.7.x requires Spring Boot 2.x; do NOT upgrade to
+// Spring Boot 3.x without also upgrading Flowable.
+// =============================================================================
+
+plugins {
+    // Spring Boot plugin — provides the 'bootJar' task (executable fat-JAR)
+    // and 'bootRun' for local development.
+    id 'org.springframework.boot' version '2.7.18'
+
+    // Imports the Spring Boot 2.7.18 BOM so managed-dependency versions are
+    // automatically aligned (PostgreSQL driver, JUnit, etc.)
+    id 'io.spring.dependency-management' version '1.0.15.RELEASE'
+
+    // Plain Java service.
+    id 'java'
+}
+
+// ---------------------------------------------------------------------------
+// Project coordinates — identical to pom.xml
+// ---------------------------------------------------------------------------
+group   = 'com.example'
+version = '0.0.1-SNAPSHOT'
+
+// ---------------------------------------------------------------------------
+// Java toolchain
+// Targets Java 11 to match the pom.xml <java.version> property.
+// Gradle will auto-provision JDK 11 via Toolchains if needed.
+// ---------------------------------------------------------------------------
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(11)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Extra version properties (equivalent to <properties> in pom.xml)
+// ---------------------------------------------------------------------------
+ext {
+    // Flowable 6.7.2 is aligned with Spring Boot 2.7.x.
+    flowableVersion = '6.7.2'
+}
+
+// ---------------------------------------------------------------------------
+// Repository resolution
+// ---------------------------------------------------------------------------
+repositories {
+    mavenCentral()
+}
+
+// ---------------------------------------------------------------------------
+// Dependencies
+// Versions omitted for Spring Boot managed deps (BOM handles them).
+// Flowable deps are NOT managed by the Spring BOM, so the version is
+// specified explicitly using the ext.flowableVersion property above.
+// ---------------------------------------------------------------------------
+dependencies {
+
+    // ── Flowable ─────────────────────────────────────────────────────────────
+    // 'flowable-spring-boot-starter-rest' includes:
+    //   - Flowable Process Engine
+    //   - Flowable REST API (process, task, history, deployment endpoints)
+    //   - Spring Boot auto-configuration for Flowable
+    //   - Built-in Basic Auth security for REST endpoints
+    implementation "org.flowable:flowable-spring-boot-starter-rest:${flowableVersion}"
+
+    // ── Database driver ──────────────────────────────────────────────────────
+    // PostgreSQL JDBC driver — runtime only (not needed at compile time).
+    // The 'postgresql' artifact version is managed by the Spring Boot 2.7 BOM.
+    runtimeOnly 'org.postgresql:postgresql'
+
+    // ── Testing ──────────────────────────────────────────────────────────────
+    // JUnit 5 + Spring Boot Test + Mockito, all version-managed by the BOM.
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}
+
+// ---------------------------------------------------------------------------
+// bootJar — produces the single executable JAR the Dockerfile copies.
+// ---------------------------------------------------------------------------
+bootJar {
+    // Fixed filename so the Dockerfile COPY instruction never needs updating.
+    archiveFileName = 'flowable-engine.jar'
+}
+
+// ---------------------------------------------------------------------------
+// Disable the plain (non-executable) JAR to avoid ambiguity.
+// ---------------------------------------------------------------------------
+jar {
+    enabled = false
+}

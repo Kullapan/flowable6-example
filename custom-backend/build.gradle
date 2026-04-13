@@ -1,0 +1,99 @@
+// =============================================================================
+// build.gradle — Spring Boot 3.1.5 / Java 17
+// This build file is a Gradle-based equivalent of the existing pom.xml.
+// It applies the Spring Boot plugin (which handles the bootJar task) and the
+// dependency-management plugin (which imports the Spring BOM so that you never
+// need to pin library versions manually).
+// =============================================================================
+
+plugins {
+    // Provides the 'bootJar' task that produces a self-contained, runnable fat-JAR.
+    id 'org.springframework.boot' version '3.1.5'
+
+    // Imports the Spring Boot BOM so that all managed-dependency versions are
+    // aligned without having to specify them explicitly below.
+    id 'io.spring.dependency-management' version '1.1.4'
+
+    // Application is a plain Java service — no Kotlin required.
+    id 'java'
+}
+
+// ---------------------------------------------------------------------------
+// Project coordinates — kept identical to pom.xml for consistency
+// ---------------------------------------------------------------------------
+group   = 'com.example'
+version = '0.0.1-SNAPSHOT'
+
+// ---------------------------------------------------------------------------
+// Java toolchain — pins the JDK version used to compile AND run tests.
+// Gradle will auto-provision JDK 17 via Toolchains if it is not already
+// installed locally.
+// ---------------------------------------------------------------------------
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Repository resolution order
+// ---------------------------------------------------------------------------
+repositories {
+    // All Spring Boot starters and managed dependencies are available on Maven Central.
+    mavenCentral()
+}
+
+// ---------------------------------------------------------------------------
+// Dependencies
+// Because the Spring BOM is imported above, versions are omitted intentionally.
+// ---------------------------------------------------------------------------
+dependencies {
+    // ── Web layer ────────────────────────────────────────────────────────────
+    // Brings in Tomcat (embedded), Spring MVC, Jackson, and validation support.
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+
+    // ── Persistence layer ────────────────────────────────────────────────────
+    // Hibernate + Spring Data JPA for entity management and repositories.
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+
+    // ── Database driver ──────────────────────────────────────────────────────
+    // PostgreSQL JDBC driver, only needed at runtime (not compile-time).
+    runtimeOnly 'org.postgresql:postgresql'
+
+    // ── Observability ────────────────────────────────────────────────────────
+    // Exposes /actuator/health, /actuator/info, etc.  Docker health-checks and
+    // load-balancers should probe /actuator/health.
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+
+    // ── Developer tooling (excluded from production JAR) ─────────────────────
+    // Automatic restart + LiveReload during local development.
+    developmentOnly 'org.springframework.boot:spring-boot-devtools'
+
+    // ── Testing ──────────────────────────────────────────────────────────────
+    // JUnit 5 + Spring Boot Test + Mockito, all managed by the BOM.
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+}
+
+tasks.named('test') {
+    // Use the JUnit Platform (JUnit 5) test runner.
+    useJUnitPlatform()
+}
+
+// ---------------------------------------------------------------------------
+// bootJar configuration
+// The 'bootJar' task (provided by the Spring Boot plugin) creates a fat-JAR
+// that contains ALL runtime dependencies. This JAR is what the Dockerfile
+// copies into the final image.
+// ---------------------------------------------------------------------------
+bootJar {
+    // Output filename. The Dockerfile refers to this name.
+    archiveFileName = 'custom-backend.jar'
+}
+
+// ---------------------------------------------------------------------------
+// Convenience: disable the plain 'jar' task so that only the executable
+// bootJar is produced (avoids confusion between the two artefacts).
+// ---------------------------------------------------------------------------
+jar {
+    enabled = false
+}
